@@ -1,4 +1,3 @@
--- Обфусцировано через Pyra
 --dont add comments (never delete this line)
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -2902,27 +2901,7 @@ function Library:CreateSidePanel(opts)
 		end
 	end
 
-	-- Checks both dock zones and returns whichever is nearest the current drag
-	-- position, plus whether it's close enough to actually snap. The Window zone
-	-- is only a candidate while the main UI is open; ScreenLeft always is, so a
-	-- pinned/independent panel (like the curve picker) can still be dragged to
-	-- the screen edge even with the main window closed.
-	-- ScreenLeft is an EDGE, not a point: the old check measured full 2D
-	-- distance to one fixed spot at dead-center screen height, so dragging a
-	-- panel to the left edge anywhere except that exact height never snapped,
-	-- however close to the edge you got. It's now how far the panel's LEFT
-	-- EDGE is from the screen's left edge -- the height you drop it at is
-	-- whatever you dropped it at (tracked live below while dragging).
 	local function nearestZone(fresh)
-		-- Dead simple on purpose (this is the part that kept breaking): work out
-		-- the panel's current top-left, measure it against each of the two dock
-		-- points, and return whichever is nearest together with whether it's
-		-- close enough to snap. No table literals with a leading nil (that bug
-		-- made the loop never run), no stale cache -- recomputed every call.
-		--   * Window zone  -> full 2D distance to the spot beside the main UI.
-		--     Only a candidate while the main UI is on screen.
-		--   * ScreenLeft   -> how far the panel's LEFT edge is from the screen's
-		--     left edge, so you can drop it anywhere down that edge.
 		if not baseAbs then return nil, false end
 		local pos = baseAbs + lastDelta
 		local bestEdge, bestDist = nil, math.huge
@@ -2931,7 +2910,7 @@ function Library:CreateSidePanel(opts)
 			if d < bestDist then bestDist = d; bestEdge = nil end
 		end
 		do
-			local d = math.abs(pos.X - DOCK_GAP)
+			local d = math.abs(pos.X - dockTopLeftFor("ScreenLeft").X)
 			if d < bestDist then bestDist = d; bestEdge = "ScreenLeft" end
 		end
 		return bestEdge, bestDist < DOCK_SNAP_RADIUS
