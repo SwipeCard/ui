@@ -419,6 +419,20 @@ local function moveAbs(inst, v)
 	)
 end
 
+local function keepOnScreen(inst, pos)
+	local cam = workspace.CurrentCamera
+	local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+	local parentSize = inst.Parent.AbsoluteSize
+	local current = inst.Position
+	local delta = Vector2.new((pos.X.Scale - current.X.Scale) * parentSize.X + pos.X.Offset - current.X.Offset,
+		(pos.Y.Scale - current.Y.Scale) * parentSize.Y + pos.Y.Offset - current.Y.Offset)
+	local point = inst.AbsolutePosition + delta
+	local size = inst.AbsoluteSize
+	local x = math.clamp(point.X, 0, math.max(0, vp.X - size.X))
+	local y = math.clamp(point.Y, 0, math.max(0, vp.Y - size.Y))
+	return pos + UDim2.fromOffset(x - point.X, y - point.Y)
+end
+
 local function screenToWorld(point, distance)
 	local ray = camera:ScreenPointToRay(point.X, point.Y)
 	return ray.Origin + ray.Direction * distance
@@ -1152,7 +1166,7 @@ function Library.new(config)
 		self._windowDragging = true
 		local origin = self.TargetPosition
 		pollDrag(input, function(d)
-			local pos = UDim2.new(origin.X.Scale, origin.X.Offset + d.X, origin.Y.Scale, origin.Y.Offset + d.Y)
+			local pos = keepOnScreen(self.Holder, UDim2.new(origin.X.Scale, origin.X.Offset + d.X, origin.Y.Scale, origin.Y.Offset + d.Y))
 			self.TargetPosition = pos
 			self.Base = pos
 			self.Holder.Position = pos + UDim2.fromOffset(self.Parallax.X, self.Parallax.Y)
@@ -1205,7 +1219,7 @@ function Library.new(config)
 			self.Base = t
 			self.Parallax = goalParallax
 			self.ParallaxVelocity = Vector2.zero
-			local rest = t + UDim2.fromOffset(goalParallax.X, goalParallax.Y)
+			local rest = keepOnScreen(self.Holder, t + UDim2.fromOffset(goalParallax.X, goalParallax.Y))
 			if rest ~= self.Holder.Position then self.Holder.Position = rest end
 			return
 		end
@@ -1219,7 +1233,7 @@ function Library.new(config)
 		else
 			self.Base = self.Base:Lerp(self.TargetPosition, math.clamp(dt * 18, 0, 1))
 		end
-		local final = self.Base + UDim2.fromOffset(self.Parallax.X, self.Parallax.Y)
+		local final = keepOnScreen(self.Holder, self.Base + UDim2.fromOffset(self.Parallax.X, self.Parallax.Y))
 		if final ~= self.Holder.Position then self.Holder.Position = final end
 
 		if (self.Parallax - lastShadow).Magnitude > 0.02 then
@@ -1321,6 +1335,16 @@ function Library:_trackScale(inst)
 	local sc = new("UIScale", { Name = "PyraScale", Scale = self:_fitScale(), Parent = inst })
 	self._scaleTargets = self._scaleTargets or {}
 	table.insert(self._scaleTargets, sc)
+	if inst.Name == "PyraPanel" or inst.Name == "PyraPicker" then
+		local function bound()
+			if not inst.Visible then return end
+			local pos = keepOnScreen(inst, inst.Position)
+			if pos ~= inst.Position then inst.Position = pos end
+		end
+		table.insert(self.Connections, inst:GetPropertyChangedSignal("AbsoluteSize"):Connect(bound))
+		table.insert(self.Connections, inst:GetPropertyChangedSignal("Visible"):Connect(bound))
+		table.insert(self.Connections, camera:GetPropertyChangedSignal("ViewportSize"):Connect(bound))
+	end
 	return sc
 end
 
@@ -1649,7 +1673,7 @@ function Library.BindMonitorDrag(bar, home, rowAt, connections, onDrag)
 				moved = true
 				if onDrag then onDrag(true) end
 			end
-			bar.Position = UDim2.new(home.X.Scale, startOff.X + d.X, home.Y.Scale, startOff.Y + d.Y)
+			bar.Position = keepOnScreen(bar, UDim2.new(home.X.Scale, startOff.X + d.X, home.Y.Scale, startOff.Y + d.Y))
 		end, function()
 			active = false
 			if onDrag then onDrag(false) end
@@ -2627,43 +2651,6 @@ function Library:CreateSidePanel(opts)
 		return win.Open and hs.X >= 8 and hs.Y >= 8
 	end
 
-	local function dockOffsetXFor(edge)
-		local x = 0
-		local obstacles = {}
-		local top = 0
-		local height = root.AbsoluteSize.Y
-		if edge == "ScreenLeft" then
-			local cam = workspace.CurrentCamera
-			local vp = (cam and cam.ViewportSize) or Vector2.new(1280, 720)
-			top = (panel._dockY or vp.Y / 2) - height / 2
-		end
-		for _, q in ipairs(win.SidePanels or {}) do
-			if q ~= panel and q._dockEligible and q._dockEligible() and q._dockEdge == edge then
-				local ahead = q._priority > panel._priority
-					or (q._priority == panel._priority and (q._order or 0) < (panel._order or math.huge))
-				if ahead then
-					if edge == "ScreenLeft" and q._dockTopLeft then
-						local pos = q._dockTopLeft()
-						local size = q.Root.AbsoluteSize
-						if top < pos.Y + size.Y + DOCK_GAP and top + height + DOCK_GAP > pos.Y then
-							obstacles[#obstacles + 1] = { left = pos.X - DOCK_GAP, right = pos.X + size.X }
-						end
-					else
-						x = x + q.Root.AbsoluteSize.X + DOCK_GAP
-					end
-				end
-			end
-		end
-		if edge == "ScreenLeft" then
-			table.sort(obstacles, function(a, b) return a.left < b.left end)
-			for _, obstacle in ipairs(obstacles) do
-				if x < obstacle.right and x + root.AbsoluteSize.X + DOCK_GAP > obstacle.left then
-					x = obstacle.right
-				end
-			end
-		end
-		return x
-	end
 
 	local function othersDocked()
 		for _, q in ipairs(win.SidePanels or {}) do
@@ -2689,10 +2676,60 @@ function Library:CreateSidePanel(opts)
 
 	local function dockTopLeftFor(edge)
 		local o = dockOriginFor(edge)
-		if edge == "ScreenLeft" then
-			return Vector2.new(o.X + dockOffsetXFor(edge), o.Y - root.AbsoluteSize.Y / 2)
+		local cam = workspace.CurrentCamera
+		local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+		local size = root.AbsoluteSize
+		local desired = edge == "ScreenLeft" and Vector2.new(o.X, o.Y - size.Y / 2) or o
+		local saved = panel._dockPlacement
+		if saved and not detached and edge == panel._dockEdge then
+			desired = edge == "ScreenLeft" and saved or o + saved
+			local bounded = Vector2.new(math.clamp(desired.X, 0, math.max(0, vp.X - size.X)), math.clamp(desired.Y, 0, math.max(0, vp.Y - size.Y)))
+			return bounded, size.X <= vp.X and size.Y <= vp.Y
 		end
-		return Vector2.new(o.X + dockOffsetXFor(edge), o.Y)
+		local obstacles = {}
+		if mainVisible() then
+			obstacles[1] = { p = win.Holder.AbsolutePosition, z = win.Holder.AbsoluteSize }
+		end
+		local xs, ys = { math.clamp(desired.X, 0, math.max(0, vp.X - size.X)) }, { math.clamp(desired.Y, 0, math.max(0, vp.Y - size.Y)) }
+		for _, q in ipairs(win.SidePanels or {}) do
+			if q ~= panel and q._dockEligible and q._dockEligible() and q._dockPlacement then
+				local p = q._dockTopLeft()
+				local z = q.Root.AbsoluteSize
+				obstacles[#obstacles + 1] = { p = p, z = z }
+				xs[#xs + 1] = p.X + z.X + DOCK_GAP
+				xs[#xs + 1] = p.X - size.X - DOCK_GAP
+				ys[#ys + 1] = p.Y + z.Y + DOCK_GAP
+				ys[#ys + 1] = p.Y - size.Y - DOCK_GAP
+			end
+		end
+		if obstacles[1] and mainVisible() then
+			local r = obstacles[1]
+			xs[#xs + 1] = r.p.X + r.z.X + DOCK_GAP
+			xs[#xs + 1] = r.p.X - size.X - DOCK_GAP
+			ys[#ys + 1] = r.p.Y + r.z.Y + DOCK_GAP
+			ys[#ys + 1] = r.p.Y - size.Y - DOCK_GAP
+		end
+		local best, distance
+		for _, x in ipairs(xs) do
+			for _, y in ipairs(ys) do
+				if x >= 0 and y >= 0 and x + size.X <= vp.X and y + size.Y <= vp.Y then
+					local free = true
+					for _, r in ipairs(obstacles) do
+						if x < r.p.X + r.z.X + DOCK_GAP and x + size.X + DOCK_GAP > r.p.X and y < r.p.Y + r.z.Y + DOCK_GAP and y + size.Y + DOCK_GAP > r.p.Y then free = false break end
+					end
+					local d = (Vector2.new(x, y) - desired).Magnitude
+					if free and (not distance or d < distance) then best = Vector2.new(x, y); distance = d end
+				end
+			end
+		end
+		return best or Vector2.new(xs[1], ys[1]), best ~= nil
+	end
+
+	local function reserveDock(edge)
+		local pos, fits = dockTopLeftFor(edge)
+		if not fits then return false end
+		panel._dockPlacement = edge == "ScreenLeft" and pos or pos - dockOriginFor(edge)
+		return true
 	end
 
 	local function dockTopLeft()
@@ -2718,7 +2755,12 @@ function Library:CreateSidePanel(opts)
 
 	local driveConn = RunService.RenderStepped:Connect(function(dt)
 		if not root.Visible then return end
-		if dragging or detached then return end
+		if dragging then return end
+		if detached then
+			local bounded = keepOnScreen(root, root.Position)
+			if bounded ~= root.Position then root.Position = bounded end
+			return
+		end
 
 		if shown then target = dockTopLeft() end
 		if win._windowDragging and shown then
@@ -2746,6 +2788,7 @@ function Library:CreateSidePanel(opts)
 	function panel:Show()
 		if detached then return end
 		if shown then return end
+		if not panel._dockPlacement and not reserveDock(panel._dockEdge) then return end
 		shown = true
 		if not root.Visible then
 			setAbs(hideTopLeft())
@@ -2852,7 +2895,7 @@ function Library:CreateSidePanel(opts)
 	local rootStroke = root:FindFirstChildOfClass("UIStroke")
 	local snapLit = false
 	panel._dockEligible = function()
-		return ((shown and not detached) or snapLit) and root.Visible
+		return shown and not detached and root.Visible
 	end
 	local function snapColor()
 		local t = panel._homeTab or win.ActiveTab
@@ -2903,14 +2946,16 @@ function Library:CreateSidePanel(opts)
 
 	local function nearestZone(fresh)
 		if not baseAbs then return nil, false end
-		local pos = baseAbs + lastDelta
+		local pos = root.AbsolutePosition
 		local bestEdge, bestDist = nil, math.huge
 		if mainVisible() then
-			local d = (pos - dockTopLeftFor(nil)).Magnitude
+			local destination, fits = dockTopLeftFor(nil)
+			local d = fits and (pos - destination).Magnitude or math.huge
 			if d < bestDist then bestDist = d; bestEdge = nil end
 		end
 		do
-			local d = math.abs(pos.X - dockTopLeftFor("ScreenLeft").X)
+			local destination, fits = dockTopLeftFor("ScreenLeft")
+			local d = fits and (pos - destination).Magnitude or math.huge
 			if d < bestDist then bestDist = d; bestEdge = "ScreenLeft" end
 		end
 		return bestEdge, bestDist < DOCK_SNAP_RADIUS
@@ -2928,7 +2973,7 @@ function Library:CreateSidePanel(opts)
 				detach()
 				rebase()
 			end
-			root.Position = UDim2.fromOffset(basePos.X.Offset + d.X, basePos.Y.Offset + d.Y)
+			root.Position = keepOnScreen(root, UDim2.fromOffset(basePos.X.Offset + d.X, basePos.Y.Offset + d.Y))
 			-- Track the height you're dragging at so the ScreenLeft ghost preview
 			-- (and the final resting spot, if you drop here) follow your cursor
 			-- instead of jumping to vertical-center.
@@ -2941,7 +2986,7 @@ function Library:CreateSidePanel(opts)
 			if detached then edge, snap = nearestZone(true) end
 			setSnapHint(false)
 			if not detached then return end
-			if snap then
+			if snap and reserveDock(edge) then
 				panel._dockEdge = edge
 				reattach()
 			else
@@ -3183,7 +3228,7 @@ function Library:AddMobilePicker(opts)
 		dragging = true
 		local startPos = root.AbsolutePosition
 		pollDrag(input, function(d)
-			root.Position = UDim2.fromOffset(startPos.X + d.X, startPos.Y + d.Y)
+			root.Position = keepOnScreen(root, UDim2.fromOffset(startPos.X + d.X, startPos.Y + d.Y))
 		end, function()
 			dragging = false
 			local cam = workspace.CurrentCamera
@@ -3192,7 +3237,7 @@ function Library:AddMobilePicker(opts)
 			local w = root.AbsoluteSize.X
 			local margin = 14
 			local snapX = (abs.X + w / 2 < vpX / 2) and margin or math.max(margin, vpX - w - margin)
-			root.Position = UDim2.fromOffset(snapX, abs.Y)
+			root.Position = keepOnScreen(root, UDim2.fromOffset(snapX, abs.Y))
 		end)
 	end)
 	local api = {}
@@ -7381,7 +7426,7 @@ function Library:CreatePanel(opts)
 		dragging = true
 		local origin = root.Position
 		pollDrag(input, function(d)
-			root.Position = UDim2.new(origin.X.Scale, origin.X.Offset + d.X, origin.Y.Scale, origin.Y.Offset + d.Y)
+			root.Position = keepOnScreen(root, UDim2.new(origin.X.Scale, origin.X.Offset + d.X, origin.Y.Scale, origin.Y.Offset + d.Y))
 		end, function()
 			dragging = false
 		end)
